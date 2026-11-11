@@ -23,42 +23,52 @@ from routing.streetgraph import StreetGraph
 
 st.set_page_config(page_title="Grafo de Entregas · Canoas/RS", page_icon="🗺️", layout="wide")
 PALETTE = [[230, 57, 70], [29, 130, 220], [46, 158, 91], [240, 160, 0], [150, 80, 200], [0, 170, 170]]
+N_OPTIONS = [5, 10, 20, 30, 40]
 
 
-@st.cache_resource(show_spinner="Carregando a malha de ruas…")
+@st.cache_resource(show_spinner=False)
 def streets() -> StreetGraph:
     return StreetGraph.load()
 
 
 @st.cache_data(show_spinner=False)
 def street_layer_df() -> pd.DataFrame:
-    """Trechos de rua coloridos pela velocidade (vermelho = lento, verde = rápido)."""
-    rows = []
+    """Cada rua desenhada uma vez (ida e volta compartilham o traçado), com a velocidade normalizada em `s`.
+
+    A cor é calculada no navegador a partir de `s`, o que deixa o pacote enviado ao mapa bem menor.
+    """
+    seen, rows = set(), []
     for e in streets().edges:
-        s = min(max((e["kph"] - 20) / 60, 0), 1)
-        rows.append({"path": [[lng, lat] for lat, lng in e["g"]],
-                     "color": [int(220 - 170 * s), int(80 + 120 * s), 90, 110]})
+        key = (min(e["u"], e["v"]), max(e["u"], e["v"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({"path": [[round(lng, 5), round(lat, 5)] for lat, lng in e["g"]],
+                     "s": round(min(max((e["kph"] - 20) / 60, 0), 1), 2)})
     return pd.DataFrame(rows)
 
 
-@st.cache_data(show_spinner="Encaixando as entregas na malha e calculando os menores caminhos…")
+@st.cache_data(show_spinner=False)
 def scenario(n: int, seed: int):
     sc, paths = build_on_streets(streets(), n=n, seed=seed)
     return sc, {f"{i}-{j}": p for (i, j), p in paths.items()}
 
 
-sg = streets()
+@st.cache_data(show_spinner=False)
+def plan_for(n: int, seed: int, vehicles: int, capacity: int, use_windows: bool):
+    sc, _ = scenario(n, seed)
+    return solve(sc, vehicles=vehicles, capacity=capacity, use_windows=use_windows, time_limit_s=3)
+
 
 with st.sidebar:
     st.header("Cenário")
-    n_del = st.slider("Entregas", 5, 40, 20)
-    seed = st.number_input("Sorteio dos pontos", 1, 999, 42, help="Gera outro conjunto de entregas em Canoas.")
+    n_del = st.select_slider("Entregas", options=N_OPTIONS, value=20,
+                             help="Tamanhos usados nas instâncias da pesquisa: 5, 10, 20, 30 e 40 pontos.")
+    seed = int(st.number_input("Sorteio dos pontos", 1, 999, 42, help="Gera outro conjunto de entregas em Canoas."))
     st.header("Frota")
     vehicles = st.slider("Veículos", 1, 6, 3)
-    sc, paths = scenario(n_del, int(seed))
-    total_demand = sum(n.demand for n in sc.nodes)
     capacity = st.slider("Capacidade por veículo (volumes)", 5, 60, 18,
-                         help=f"Demanda total do cenário: {total_demand} volumes.")
+                         help="Cada entrega tem de 1 a 3 volumes.")
     use_windows = st.toggle("Respeitar janelas de entrega", value=True)
     st.header("Camadas")
     show_streets = st.toggle("Malha de ruas (grafo base)", value=True)
@@ -68,11 +78,25 @@ with st.sidebar:
     st.caption("Malha: OpenStreetMap (osmnx), velocidades por tipo de via, sem trânsito. "
                "Entregas fictícias em Canoas/RS; CD no polo logístico Velopark (Nova Santa Rita/RS).")
 
-plan = solve(sc, vehicles=vehicles, capacity=capacity, use_windows=use_windows)
-
 st.title("🗺️ Grafo de Entregas — Canoas/RS")
 st.caption("Primeiro a malha de ruas vira um grafo dirigido (cruzamentos e trechos); depois as entregas são "
            "encaixadas nele e as rotas são resolvidas com OR-Tools sobre os menores caminhos.")
+
+# ---------------- pipeline com progresso visível ----------------
+with st.status("Preparando o mapa…", expanded=False) as status:
+    status.update(label="Carregando a malha de ruas de Canoas…")
+    sg = streets()
+    st.write(f"✓ Malha carregada: {sg.g.number_of_nodes():,} cruzamentos e {sg.g.number_of_edges():,} trechos".replace(",", "."))
+    status.update(label=f"Encaixando {n_del} entregas na malha e calculando os menores caminhos…")
+    sc, paths = scenario(n_del, seed)
+    st.write(f"✓ {n_del} entregas encaixadas nos cruzamentos; matriz {len(sc.nodes)}×{len(sc.nodes)} pelas ruas")
+    status.update(label=f"Resolvendo as rotas com OR-Tools ({vehicles} veículos)…")
+    plan = plan_for(n_del, seed, vehicles, capacity, use_windows)
+    st.write(f"✓ Rotas resolvidas: {len(plan.routes)} veículo(s), {plan.total_distance_km:.0f} km")
+    status.update(label="Desenhando a malha e as rotas…")
+    streets_df = street_layer_df() if show_streets else None
+    st.write("✓ Camadas do mapa prontas")
+    status.update(label="Dados prontos · o mapa aparece logo abaixo", state="complete")
 
 c = st.columns(5)
 c[0].metric("Malha", f"{sg.g.number_of_nodes():,} nós".replace(",", "."),
@@ -94,7 +118,8 @@ def street_path(i: int, j: int) -> list[list[float]]:
 # ---------------- mapa ----------------
 layers = []
 if show_streets:
-    layers.append(pdk.Layer("PathLayer", street_layer_df(), get_path="path", get_color="color",
+    layers.append(pdk.Layer("PathLayer", streets_df, get_path="path",
+                            get_color="[220 - 170 * s, 80 + 120 * s, 90, 110]",
                             width_min_pixels=1, width_max_pixels=2))
 if show_graph:
     edges = pd.DataFrame(knn_edges(sc, k))
@@ -131,8 +156,12 @@ layers += [
               get_color=[0, 0, 0], get_alignment_baseline="'bottom'", get_pixel_offset=[0, -10]),
 ]
 view = pdk.ViewState(latitude=float(nodes_df.lat.mean()), longitude=float(nodes_df.lng.mean()), zoom=11.5)
-st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=view, map_style="light",
-                         tooltip={"text": "{tooltip}"}), height=580)
+if show_streets:
+    st.caption("⏳ Na primeira abertura, o navegador leva alguns segundos para desenhar os "
+               f"{len(streets_df):,} trechos de rua.".replace(",", "."))
+with st.spinner("Desenhando o mapa…", show_time=True):
+    st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=view, map_style="light",
+                             tooltip={"text": "{tooltip}"}), height=580)
 st.caption("Malha colorida pela velocidade da via (vermelho = lenta, verde = rápida). "
            "Ligue “Grafo de entregas” para ver as arestas entre as entregas seguindo as ruas.")
 

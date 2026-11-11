@@ -22,7 +22,10 @@ def test_app_runs_and_fleet_controls_change_plan():
 
 def test_new_scenario_from_sidebar():
     at = AppTest.from_file(APP, default_timeout=120).run()
-    next(s for s in at.slider if s.label == "Entregas").set_value(8)
+    sl = next(s for s in at.select_slider if s.label == "Entregas")
+    assert list(sl.options) == ["5", "10", "20", "30", "40"]
+    sl.set_value(10)
     at.run()
     assert not at.exception
-    assert _metric(at, "Entregas") == "8"
+    assert _metric(at, "Entregas") == "10"
+    assert at.status[0].proto.label.startswith("Dados prontos")  # o progresso termina como concluído
