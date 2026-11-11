@@ -1,8 +1,10 @@
-"""Cenário de entregas: um CD e pontos fictícios, com matriz de distância/tempo do OpenStreetMap (OSRM).
+"""Cenário de entregas: um CD e pontos fictícios sobre a malha viária.
 
 O CD é o Velopark (Nova Santa Rita/RS), polo logístico público na divisa com Canoas.
-Os pontos de entrega são sorteados dentro de Canoas e ajustados ("snap") para a rua
-mais próxima pelo próprio OSRM. Nenhum dado de cliente é usado.
+Os pontos de entrega são sorteados dentro de Canoas e encaixados no cruzamento mais
+próximo do grafo de ruas (`streetgraph`), de onde saem as matrizes de tempo e distância
+pelos menores caminhos. Alternativa: `build()` usa o serviço OSRM em vez do grafo local.
+Nenhum dado de cliente é usado.
 """
 
 from __future__ import annotations
@@ -96,6 +98,25 @@ def build(n: int = 20, seed: int = 42, depot: dict | None = None, bbox: dict | N
                     meta={"seed": seed, "n_deliveries": n, "bbox": bbox or CANOAS_BBOX})
 
 
+def build_on_streets(sg, n: int = 20, seed: int = 42, depot: dict | None = None,
+                     bbox: dict | None = None) -> tuple[Scenario, dict]:
+    """Encaixa CD e entregas no grafo de ruas e calcula as matrizes pelos menores caminhos.
+
+    Retorna o cenário e os caminhos (sequência de cruzamentos) entre cada par de pontos,
+    usados para desenhar as arestas do grafo de entregas seguindo as ruas.
+    """
+    nodes = sample_points(n, seed, depot, bbox)
+    street_nodes = []
+    for node in nodes:
+        sn = sg.nearest_node(node.lat, node.lng)
+        street_nodes.append(sn)
+        node.lat, node.lng = sg.g.nodes[sn]["lat"], sg.g.nodes[sn]["lng"]
+    dist, dur, paths = sg.od_matrices(street_nodes)
+    sc = Scenario(nodes=nodes, distance_m=dist, duration_s=dur, source="Grafo de ruas OpenStreetMap",
+                  meta={"seed": seed, "n_deliveries": n, "street_nodes": street_nodes})
+    return sc, paths
+
+
 def to_ortools(sc: Scenario) -> dict:
     """Formato de entrada direto para modelos OR-Tools / benchmarks de VRP (matrizes inteiras em m e s)."""
     return {
@@ -118,12 +139,19 @@ def main(argv: list[str] | None = None) -> Path:
     p.add_argument("--depot-name", default=None)
     p.add_argument("--bbox", nargs=4, type=float, metavar=("LAT_MIN", "LAT_MAX", "LNG_MIN", "LNG_MAX"),
                    help="área onde sortear as entregas (padrão: Canoas/RS)")
-    p.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[1] / "data" / "canoas_20.json")
+    p.add_argument("--engine", choices=["streets", "osrm"], default="streets",
+                   help="streets: menores caminhos no grafo de ruas local; osrm: serviço OSRM público")
+    p.add_argument("--streets", type=Path, help="grafo de ruas (.json.gz) gerado por routing.streetgraph")
+    p.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[1] / "data" / "scenario.json")
     p.add_argument("--ortools", type=Path, help="também salva no formato OR-Tools neste caminho")
     a = p.parse_args(argv)
     depot = ({"name": a.depot_name or "CD", "lat": a.depot[0], "lng": a.depot[1]} if a.depot else None)
     bbox = {"lat": tuple(a.bbox[:2]), "lng": tuple(a.bbox[2:])} if a.bbox else None
-    sc = build(a.n, a.seed, depot, bbox)
+    if a.engine == "streets":
+        from routing.streetgraph import STREETS, StreetGraph
+        sc, _ = build_on_streets(StreetGraph.load(a.streets or STREETS), a.n, a.seed, depot, bbox)
+    else:
+        sc = build(a.n, a.seed, depot, bbox)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     sc.to_json(a.out)
     if a.ortools:

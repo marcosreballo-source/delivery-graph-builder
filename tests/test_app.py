@@ -18,3 +18,11 @@ def test_app_runs_and_fleet_controls_change_plan():
     assert not at.exception
     assert int(_metric(at, "Não atendidas")) > 0  # 1 veículo não dá conta das 20 entregas
     assert at.warning  # e o painel explica o que ficou de fora
+
+
+def test_new_scenario_from_sidebar():
+    at = AppTest.from_file(APP, default_timeout=120).run()
+    next(s for s in at.slider if s.label == "Entregas").set_value(8)
+    at.run()
+    assert not at.exception
+    assert _metric(at, "Entregas") == "8"

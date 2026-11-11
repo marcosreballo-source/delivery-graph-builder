@@ -40,5 +40,6 @@ def to_networkx(sc: Scenario, k: int = 3) -> nx.Graph:
 def asymmetry(sc: Scenario) -> float:
     """Assimetria média do tempo (ida x volta). Sentido único e conversões fazem a malha real ser dirigida."""
     d = np.array(sc.duration_s)
-    mask = ~np.eye(len(d), dtype=bool)
-    return float(np.mean(np.abs(d - d.T)[mask] / np.maximum(d, d.T)[mask]))
+    hi = np.maximum(d, d.T)
+    mask = ~np.eye(len(d), dtype=bool) & (hi > 0)  # ignora pontos que caíram no mesmo cruzamento
+    return float(np.mean(np.abs(d - d.T)[mask] / hi[mask])) if mask.any() else 0.0
