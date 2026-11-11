@@ -61,7 +61,7 @@ st.caption("Malha viária real (OpenStreetMap/OSRM) como grafo dirigido e ponder
 c = st.columns(5)
 c[0].metric("Entregas", n_del)
 c[1].metric("Veículos usados", f"{len(plan.routes)} de {vehicles}")
-c[2].metric("Distância total", f"{plan.total_distance_km:.1f} km")
+c[2].metric("Distância total", f"{plan.total_distance_km:.0f} km")
 c[3].metric("Jornadas somadas", f"{plan.total_duration_min / 60:.1f} h",
             help="Da saída à volta ao CD, incluindo serviço e esperas pela abertura das janelas.")
 c[4].metric("Não atendidas", len(plan.dropped), help="Entregas que não cabem na frota ou na janela de horário.")

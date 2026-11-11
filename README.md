@@ -4,7 +4,7 @@ O Delivery Graph Builder recebe um **centro de distribuição e um conjunto de p
 
 ![Grafo de entregas em Canoas/RS](docs/grafo_canoas.jpg)
 
-**Demo:** <!-- TODO: link do Streamlit Cloud -->
+**▶ Demo online:** https://delivery-graph-builder-canoas.streamlit.app/
 
 ## Por que
 
