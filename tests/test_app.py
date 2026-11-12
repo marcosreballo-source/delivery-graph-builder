@@ -13,6 +13,9 @@ def test_app_runs_and_fleet_controls_change_plan():
     at = AppTest.from_file(APP, default_timeout=120).run()
     assert not at.exception
     assert _metric(at, "Não atendidas") == "0"
+    assert not any(m.label == "Malha" for m in at.metric)            # número fixo saiu do topo
+    assert _metric(at, "Horas ao volante").endswith(" h")
+    assert _metric(at, "Subida acumulada").endswith(" m")
     next(s for s in at.slider if s.label == "Veículos").set_value(1)
     at.run()
     assert not at.exception

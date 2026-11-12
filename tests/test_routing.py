@@ -27,6 +27,17 @@ def test_street_graph_is_a_directed_road_network(sg):
     assert d["length"] > 0 and d["time"] > 0 and len(d["geometry"]) >= 2
 
 
+def test_elevation_and_climb(sg, built):
+    assert sg.has_elevation
+    zs = [d["elev"] for _, d in sg.g.nodes(data=True)]
+    assert -10 <= min(zs) < max(zs) < 300  # Canoas/RS: planície do Rio dos Sinos (SRTM tem ruído de ±m perto do rio)
+    _, paths = built
+    path = paths[(0, 1)]
+    up, down = sg.path_climb(path)
+    z0, z1 = sg.g.nodes[path[0]]["elev"], sg.g.nodes[path[-1]]["elev"]
+    assert up >= 0 and down >= 0 and round(up - down, 1) == round(z1 - z0, 1)  # subida − descida = desnível líquido
+
+
 def test_deliveries_are_snapped_to_intersections(sg, built):
     sc, _ = built
     for node, street_node in zip(sc.nodes, sc.meta["street_nodes"]):

@@ -54,6 +54,40 @@ def download(bbox: dict = BBOX, out: Path = STREETS) -> Path:
     return out
 
 
+def add_elevations(path: Path = STREETS, dataset: str = "srtm30m", batch: int = 100) -> int:
+    """Altitude de cada cruzamento (SRTM 30 m via OpenTopoData, gratuito; 100 pontos/req, 1 req/s).
+
+    Grava em `elev` dentro do mesmo arquivo. Rode uma vez depois do download.
+    """
+    import time
+
+    import requests
+
+    with gzip.open(path, "rt", encoding="utf-8") as fh:
+        raw = json.load(fh)
+    ids = list(raw["nodes"])
+    elev: dict[str, float] = dict(raw.get("elev", {}))
+    todo = [i for i in ids if i not in elev]
+    s = requests.Session()
+    for k in range(0, len(todo), batch):
+        chunk = todo[k:k + batch]
+        locs = "|".join(f"{raw['nodes'][i][0]},{raw['nodes'][i][1]}" for i in chunk)
+        for attempt in range(5):
+            r = s.get(f"https://api.opentopodata.org/v1/{dataset}", params={"locations": locs}, timeout=60)
+            if r.status_code == 200:
+                break
+            time.sleep(2 ** attempt)
+        r.raise_for_status()
+        for i, res in zip(chunk, r.json()["results"]):
+            elev[i] = round(float(res["elevation"] or 0.0), 1)
+        time.sleep(1.1)
+    raw["elev"] = elev
+    raw["elev_source"] = f"OpenTopoData {dataset}"
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        json.dump(raw, fh, separators=(",", ":"))
+    return len(elev)
+
+
 # ---------------------------------------------------------------- uso (sem osmnx)
 @dataclass
 class StreetGraph:
@@ -68,8 +102,9 @@ class StreetGraph:
         with gzip.open(path, "rt", encoding="utf-8") as fh:
             raw = json.load(fh)
         g = nx.DiGraph()
+        elev = raw.get("elev", {})
         for n, (lat, lng) in raw["nodes"].items():
-            g.add_node(int(n), lat=lat, lng=lng)
+            g.add_node(int(n), lat=lat, lng=lng, elev=elev.get(n))
         for e in raw["edges"]:
             g.add_edge(e["u"], e["v"], length=e["m"], time=e["t"], kph=e["kph"], geometry=e["g"])
         ids = np.array(list(g.nodes), dtype=np.int64)
@@ -81,6 +116,18 @@ class StreetGraph:
         k = np.cos(np.radians(lat))
         d2 = (self.node_xy[:, 0] - lat) ** 2 + ((self.node_xy[:, 1] - lng) * k) ** 2
         return int(self.node_ids[int(np.argmin(d2))])
+
+    @property
+    def has_elevation(self) -> bool:
+        return all(d.get("elev") is not None for _, d in self.g.nodes(data=True))
+
+    def path_climb(self, path: list[int]) -> tuple[float, float]:
+        """Subida e descida acumuladas (m) ao longo do caminho, pela altitude dos cruzamentos."""
+        up = down = 0.0
+        for a, b in zip(path[:-1], path[1:]):
+            dz = (self.g.nodes[b]["elev"] or 0.0) - (self.g.nodes[a]["elev"] or 0.0)
+            up, down = (up + dz, down) if dz > 0 else (up, down - dz)
+        return up, down
 
     def path_geometry(self, path: list[int]) -> list[list[float]]:
         """Traçado do caminho seguindo a geometria das ruas, como [lng, lat] (formato do pydeck)."""
@@ -114,9 +161,11 @@ if __name__ == "__main__":
     ap.add_argument("--bbox", nargs=4, type=float, metavar=("SOUTH", "NORTH", "WEST", "EAST"),
                     help="padrão: Canoas/RS + Velopark")
     ap.add_argument("--out", type=Path, default=STREETS)
+    ap.add_argument("--elevation-only", action="store_true", help="só adiciona altitudes a um arquivo já baixado")
     a = ap.parse_args()
     box = dict(zip(["south", "north", "west", "east"], a.bbox)) if a.bbox else BBOX
-    out = download(box, a.out)
+    out = a.out if a.elevation_only else download(box, a.out)
+    print(f"altitudes: {add_elevations(out)} cruzamentos")
     sg = StreetGraph.load(out)
     print(f"{sg.g.number_of_nodes()} cruzamentos, {sg.g.number_of_edges()} trechos -> {out} "
           f"({out.stat().st_size / 1e6:.1f} MB)")

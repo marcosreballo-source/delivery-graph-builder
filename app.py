@@ -98,13 +98,33 @@ with st.status("Preparando o mapa…", expanded=False) as status:
     st.write("✓ Camadas do mapa prontas")
     status.update(label="Dados prontos · o mapa aparece logo abaixo", state="complete")
 
-c = st.columns(5)
-c[0].metric("Malha", f"{sg.g.number_of_nodes():,} nós".replace(",", "."),
-            help=f"{sg.g.number_of_edges():,} trechos de rua".replace(",", "."))
-c[1].metric("Entregas", len(sc.nodes) - 1)
-c[2].metric("Veículos usados", f"{len(plan.routes)} de {vehicles}")
-c[3].metric("Distância total", f"{plan.total_distance_km:.0f} km")
-c[4].metric("Não atendidas", len(plan.dropped), help="Entregas que não cabem na frota ou na janela de horário.")
+def route_stats(r) -> dict:
+    """Tempo ao volante (só deslocamento) e subida/descida acumuladas de uma rota, pelas ruas."""
+    legs = [(a, b) for a, b in zip(r.stops[:-1], r.stops[1:]) if a != b]
+    drive_s = sum(sc.duration_s[a][b] for a, b in legs)
+    up = down = 0.0
+    if sg.has_elevation:
+        for a, b in legs:
+            u, d = sg.path_climb(paths[f"{a}-{b}"])
+            up, down = up + u, down + d
+    return {"drive_h": drive_s / 3600, "up": up, "down": down}
+
+
+stats = [route_stats(r) for r in plan.routes]
+drive_h = sum(s["drive_h"] for s in stats)
+climb = sum(s["up"] for s in stats)
+
+c = st.columns(6)
+c[0].metric("Entregas", len(sc.nodes) - 1)
+c[1].metric("Veículos usados", f"{len(plan.routes)} de {vehicles}")
+c[2].metric("Distância total", f"{plan.total_distance_km:.0f} km")
+c[3].metric("Horas ao volante", f"{drive_h:.1f} h".replace(".", ","),
+            help=f"Só o tempo de deslocamento pelas ruas, somado em todos os veículos. Com paradas de 5 min e "
+                 f"esperas pelas janelas, as jornadas somam {plan.total_duration_min / 60:.1f} h.".replace(".", ",", 1))
+c[4].metric("Subida acumulada", f"{climb:,.0f} m".replace(",", ".") if sg.has_elevation else "—",
+            help="Soma de todas as subidas das rotas, pela altitude dos cruzamentos (SRTM 30 m). "
+                 "Afeta consumo de combustível e desgaste, principalmente de caminhões e bicicletas.")
+c[5].metric("Não atendidas", len(plan.dropped), help="Entregas que não cabem na frota ou na janela de horário.")
 if plan.dropped:
     st.warning(f"{len(plan.dropped)} entrega(s) ficaram de fora: "
                + ", ".join(sc.nodes[i].name for i in plan.dropped)
@@ -135,9 +155,11 @@ if show_routes:
         for a, b in zip(r.stops[:-1], r.stops[1:]):
             seg = street_path(a, b) if a != b else []
             geo.extend(seg if not geo else seg[1:])
+        st_r = stats[v]
         rows.append({"path": geo, "color": PALETTE[v % len(PALETTE)],
                      "tooltip": f"Veículo {v + 1}: {len(r.stops) - 2} entregas · {r.distance_m / 1000:.1f} km · "
-                                f"{r.duration_min:.0f} min · carga {r.load}/{capacity}"})
+                                f"{st_r['drive_h'] * 60:.0f} min ao volante · ↑{st_r['up']:.0f} m ↓{st_r['down']:.0f} m · "
+                                f"carga {r.load}/{capacity}"})
     layers.append(pdk.Layer("PathLayer", pd.DataFrame(rows), get_path="path", get_color="color",
                             width_min_pixels=4, pickable=True))
 
@@ -173,12 +195,22 @@ with tab_routes:
 with tab_graph:
     one_way = sum(1 for u, v in sg.g.edges if not sg.g.has_edge(v, u)) / sg.g.number_of_edges()
     km = sum(d["length"] for *_, d in sg.g.edges(data=True)) / 1000
-    a, b, cc, dd = st.columns(4)
+    a, b, cc, dd, ee = st.columns(5)
     a.metric("Cruzamentos / trechos", f"{sg.g.number_of_nodes():,} / {sg.g.number_of_edges():,}".replace(",", "."))
     b.metric("Malha mapeada", f"{km:,.0f} km".replace(",", "."))
     cc.metric("Trechos de mão única", f"{one_way * 100:.0f}%")
     dd.metric("Assimetria ida × volta", f"{asymmetry(sc) * 100:.0f}%",
               help="Diferença média entre o tempo de i→j e j→i entre as entregas: mão única e conversões.")
+    if sg.has_elevation:
+        zs = [d["elev"] for _, d in sg.g.nodes(data=True)]
+        ee.metric("Altitude da malha", f"{max(min(zs), 0):.0f} a {max(zs):.0f} m", help="SRTM 30 m via OpenTopoData.")
+    if plan.routes:
+        st.markdown("**Por veículo**")
+        st.dataframe(pd.DataFrame([{
+            "Veículo": i + 1, "Entregas": len(r.stops) - 2, "Distância (km)": round(r.distance_m / 1000, 1),
+            "Ao volante (min)": round(s["drive_h"] * 60), "Jornada (min)": round(r.duration_min),
+            "Subida (m)": round(s["up"]), "Descida (m)": round(s["down"]), "Carga": f"{r.load}/{capacity}",
+        } for i, (r, s) in enumerate(zip(plan.routes, stats))]), hide_index=True, width="stretch")
     st.caption(f"Fortemente conexo: {'sim' if nx.is_strongly_connected(sg.g) else 'não'} "
                "(todo cruzamento alcança qualquer outro respeitando o sentido das ruas).")
     labels = [("CD" if n.kind == "depot" else str(n.id)) for n in sc.nodes]
