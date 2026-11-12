@@ -1,7 +1,5 @@
 """Utilidades de grafo: arestas do grafo k-vizinhos e métricas de grafo sobre a matriz de tempos."""
 
-from __future__ import annotations
-
 import networkx as nx
 import numpy as np
 

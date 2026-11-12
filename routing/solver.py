@@ -6,8 +6,6 @@
   devolver um plano e o painel mostrar o que ficou de fora (em vez de "sem solução").
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2

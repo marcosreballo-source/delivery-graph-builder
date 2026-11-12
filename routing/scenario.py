@@ -7,8 +7,6 @@ pelos menores caminhos. Alternativa: `build()` usa o serviço OSRM em vez do gra
 Nenhum dado de cliente é usado.
 """
 
-from __future__ import annotations
-
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path

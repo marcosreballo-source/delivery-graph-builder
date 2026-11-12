@@ -8,8 +8,6 @@ cruzamento mais próximo e calcula os menores caminhos (Dijkstra) sobre o grafo 
 Ruas de mão única ficam como arestas de um sentido só — por isso ida e volta diferem.
 """
 
-from __future__ import annotations
-
 import gzip
 import json
 from dataclasses import dataclass

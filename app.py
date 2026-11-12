@@ -10,6 +10,9 @@ Rodar: streamlit run app.py
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
 import networkx as nx
 import numpy as np
 import pandas as pd
@@ -19,20 +22,37 @@ import streamlit as st
 from routing.graph import asymmetry, knn_edges
 from routing.scenario import build_on_streets
 from routing.solver import route_table, solve
-from routing.streetgraph import StreetGraph
+from routing.streetgraph import STREETS, StreetGraph
+
+ROUTING_DIR = Path(__file__).resolve().parent / "routing"
 
 st.set_page_config(page_title="Grafo de Entregas · Canoas/RS", page_icon="🗺️", layout="wide")
 PALETTE = [[230, 57, 70], [29, 130, 220], [46, 158, 91], [240, 160, 0], [150, 80, 200], [0, 170, 170]]
 N_OPTIONS = [5, 10, 20, 30, 40]
 
 
+def _version() -> str:
+    """Impressão digital do código de `routing/` + dados da malha.
+
+    Entra como argumento das funções em cache: num deploy novo, objetos criados pela versão
+    antiga do código não são reaproveitados (evita, p. ex., uma StreetGraph antiga sem os campos novos).
+    """
+    h = hashlib.sha1()
+    for p in sorted(ROUTING_DIR.glob("*.py")) + [STREETS]:
+        h.update(p.read_bytes())
+    return h.hexdigest()[:12]
+
+
+VERSION = _version()
+
+
 @st.cache_resource(show_spinner=False)
-def streets() -> StreetGraph:
+def streets(version: str = VERSION) -> StreetGraph:
     return StreetGraph.load()
 
 
 @st.cache_data(show_spinner=False)
-def street_layer_df() -> pd.DataFrame:
+def street_layer_df(version: str = VERSION) -> pd.DataFrame:
     """Cada rua desenhada uma vez (ida e volta compartilham o traçado), com a velocidade normalizada em `s`.
 
     A cor é calculada no navegador a partir de `s`, o que deixa o pacote enviado ao mapa bem menor.
@@ -49,13 +69,13 @@ def street_layer_df() -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def scenario(n: int, seed: int):
+def scenario(n: int, seed: int, version: str = VERSION):
     sc, paths = build_on_streets(streets(), n=n, seed=seed)
     return sc, {f"{i}-{j}": p for (i, j), p in paths.items()}
 
 
 @st.cache_data(show_spinner=False)
-def plan_for(n: int, seed: int, vehicles: int, capacity: int, use_windows: bool):
+def plan_for(n: int, seed: int, vehicles: int, capacity: int, use_windows: bool, version: str = VERSION):
     sc, _ = scenario(n, seed)
     return solve(sc, vehicles=vehicles, capacity=capacity, use_windows=use_windows, time_limit_s=3)
 
